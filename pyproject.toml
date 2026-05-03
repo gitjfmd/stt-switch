@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stt-switch"
+version = "0.1.0"
+description = "Route Claude Code voice mode to a local STT engine of your choice. Apple Silicon native."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+  { name = "jfmd" },
+]
+keywords = ["claude-code", "stt", "speech-to-text", "whisper", "moonshine", "mlx", "voice"]
+requires-python = ">=3.10"
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+  "Topic :: Utilities",
+]
+dependencies = [
+  "websockets>=15",
+  "numpy>=1.26",
+  "soundfile>=0.12",
+]
+
+[project.optional-dependencies]
+mlx = ["mlx-whisper>=0.4"]
+moonshine = ["useful-moonshine-onnx>=2025"]
+moonshine-streaming = ["transformers>=5.6"]
+whisper = ["faster-whisper>=1.0"]
+all = [
+  "mlx-whisper>=0.4",
+  "useful-moonshine-onnx>=2025",
+  "transformers>=5.6",
+  "faster-whisper>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/jfmd/stt-switch"
+Repository = "https://github.com/jfmd/stt-switch"
+Issues = "https://github.com/jfmd/stt-switch/issues"
+
+[project.scripts]
+stt-switch = "stt_switch.cli:main"
+cc-voice-proxy = "stt_switch.proxy:run_main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

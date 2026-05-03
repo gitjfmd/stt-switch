@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local.cc-voice-proxy</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>cc-voice-proxy</string>
+    <string></string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/cc-voice-proxy.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/cc-voice-proxy.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/YOU</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <!-- Override these by editing the plist after `wire-cc-voice.sh` and reloading the agent. -->
+    <!-- Default: moonshine-onnx-base on M5 Max CPU (~28 ms warm).                    -->
+    <!-- For a remote GPU server, set CC_STT_PROFILE=remote-speaches.                       -->
+    <key>CC_STT_PROFILE</key>
+    <string>moonshine-onnx-base</string>
+  </dict>
+</dict>
+</plist>
