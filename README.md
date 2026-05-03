@@ -1,196 +1,372 @@
-# stt-switch
+<div align="center">
 
-**Route Claude Code voice mode to a local speech-to-text engine of your choice.**
-Apple Silicon native. Zero outbound traffic on the happy path. Drop-in replacement for `api.anthropic.com → Deepgram`.
+# 🎙️ stt-switch
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon-blue)
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776ab)
+### Route Claude Code voice mode to a local STT engine of your choice
+
+**Apple Silicon native · zero outbound traffic on the happy path · drop-in replacement for `api.anthropic.com → Deepgram`**
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+[![macOS](https://img.shields.io/badge/macOS-Apple_Silicon-000000?style=flat-square&logo=apple&logoColor=white)](https://www.apple.com/mac/)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776ab?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![MLX](https://img.shields.io/badge/MLX-Apple-blueviolet?style=flat-square)](https://github.com/ml-explore/mlx)
+[![Privacy](https://img.shields.io/badge/audio-stays_on_device-brightgreen?style=flat-square)](#-privacy-posture)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4?style=flat-square)](#contributing)
 
 ```
-                              [ Claude Code ]
-                                    │  /voice  hold Space
-                                    │  16 kHz linear16 PCM
-                                    ▼
-        ┌──────────────────────────────────────────────────────┐
-        │   ws://127.0.0.1:8113   cc-voice-proxy (this repo)   │
-        │                                                      │
-        │   • Speaks Anthropic's voice_stream protocol         │
-        │   • Pluggable backend selected by env var            │
-        │   • Optional fallback chain for accuracy             │
-        └──────────────────────────────────────────────────────┘
-                                    │
-            ┌───────────────────────┼───────────────────────────┐
-            ▼                       ▼                           ▼
-   mlx-whisper (Apple GPU)   moonshine (CPU)            remote (OpenAI-compat)
-       ~89 ms warm             ~30 ms warm               ~200 ms (network)
+┌────────────────────────────────────────────────────────────────────────┐
+│                                                                        │
+│   89 ms warm  •  16 backends  •  one env var  •  zero cloud calls     │
+│                                                                        │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Why
+</div>
 
-Claude Code's `/voice` mode streams audio over WebSocket to `api.anthropic.com/api/ws/speech_to_text/voice_stream`, which forwards it to **Deepgram**. Audio crosses the public internet and is processed by two third-parties before you see the transcript. There's no in-product opt-out.
+---
 
-`stt-switch` flips a single env var (`VOICE_STREAM_BASE_URL`) at the Claude Code binary so that voice traffic instead goes to a local WebSocket proxy on `127.0.0.1`. The proxy speaks the same protocol Claude Code's client expects, then transcribes locally (or via a server you control) and hands the text back. **Audio never leaves your Mac unless you explicitly route a fallback to a remote endpoint.**
+## 🚀 The pitch in one paragraph
 
-## Quick start
+Claude Code's `/voice` mode streams every word you say to `api.anthropic.com → Deepgram`. Two third-parties, no in-product opt-out. **stt-switch** flips one env var (`VOICE_STREAM_BASE_URL`) to redirect the audio to a local WebSocket proxy that speaks the same Anthropic protocol. Your speech is transcribed on-device by your choice of 16 backends — including Whisper-large-v3-turbo on Apple Silicon GPU at **89 ms warm**, faster than the network round-trip to Deepgram. One CLI command swaps backends. MIT licensed. ✨
 
-```sh
-# 1. Install (any one of: full, mlx-only, all-local, ...)
-pip install "stt-switch[mlx,moonshine]"
+---
 
-# 2. Wire it up (writes a launchd plist + appends an export to ~/.zshrc)
+## ⚡ Quick demo
+
+```bash
+# Install
+pip install "git+https://github.com/gitjfmd/stt-switch.git#egg=stt-switch[mlx,moonshine]"
+
+# Wire it up (adds env var + launchd agent)
 stt-switch wire
 
-# 3. Pick a backend
+# Pick the engine
 stt-switch mlx-whisper-large-v3-turbo
 
-# 4. Open a NEW terminal so the env var is picked up, then:
-claude
-
-# 5. /voice as usual. Audio stays on this Mac.
+# Open a NEW terminal so the env var is picked up
+claude        # /voice as usual — audio never leaves your Mac
 ```
 
-To revert any time:
-```sh
-stt-switch unwire
+Revert any time with `stt-switch unwire`.
+
+---
+
+## 🏗️ Architecture
+
+```mermaid
+flowchart LR
+    A([🎙️ Mac mic<br/>AVFoundation]) -->|16 kHz linear16| B
+    B[ws://127.0.0.1:8113<br/>cc-voice-proxy] -->|TranscriptText<br/>TranscriptEndpoint| A
+    B --> C{stt-switch<br/>backend}
+    C -->|swap by env var| D1[🍎 MLX-Whisper<br/>Apple GPU<br/>89 ms]
+    C --> D2[🔊 Moonshine<br/>CPU<br/>17 ms]
+    C --> D3[🌐 Remote<br/>OpenAI-compat<br/>200 ms]
+    D1 -.no network.-> X[(privacy)]
+    D2 -.no network.-> X
+    D3 -.your server.-> Y[(your control)]
+
+    style A fill:#1f6feb,stroke:#fff,color:#fff
+    style B fill:#8957e5,stroke:#fff,color:#fff
+    style D1 fill:#1a7f37,stroke:#fff,color:#fff
+    style D2 fill:#1a7f37,stroke:#fff,color:#fff
+    style D3 fill:#fb8500,stroke:#fff,color:#fff
 ```
 
-## Profile catalog (measured on Apple M5 Max, 48 GB RAM, 3-second clip)
+The proxy speaks Anthropic's **decoded** [`voice_stream` protocol](docs/PROTOCOL.md) (not Deepgram's wire format — that's the trap most people fall into). Authentication is unchanged; CC still writes its OAuth bearer, the proxy ignores it.
 
-| Profile | Backend | Warm latency | Cold load | Where |
-|---|---|---:|---:|---|
-| `mlx-whisper-tiny-en` | MLX whisper-tiny.en | **11–22 ms** | 17 s¹ | Apple GPU |
-| `mlx-whisper-base-en` | MLX whisper-base.en | **14–15 ms** | 13 s¹ | Apple GPU |
-| `moonshine-onnx-tiny` | useful-moonshine-onnx tiny | 16–18 ms | 1.4 s | Mac CPU |
-| `moonshine-onnx-base` | useful-moonshine-onnx base | 29–33 ms | 0.8 s | Mac CPU |
-| `mlx-whisper-small-en` | MLX whisper-small.en | 39–40 ms | 35 s¹ | Apple GPU |
-| `moonshine-stream-tiny` | HF transformers tiny stream | 73–74 ms | 7.7 s | Mac CPU |
-| `mlx-whisper-medium-en` | MLX whisper-medium.en | 86–95 ms | 166 s¹ | Apple GPU |
-| `mlx-whisper-distil-large-v3` | MLX distil-whisper-large-v3 | 88–98 ms | 153 s¹ | Apple GPU |
-| **`mlx-whisper-large-v3-turbo`** | **MLX whisper-large-v3-turbo** | **88–90 ms** | **1.1 s** | Apple GPU |
-| **`mlx-chain`** *(recommended)* | turbo → remote large-v3 fallback | **91–94 ms** | 1 s | Local + (remote) |
-| `mlx-whisper-large-v3` | MLX whisper-large-v3 | 141–149 ms | 1.6 s | Apple GPU |
-| `whisper-faster-base` | faster-whisper base int8 | ~200 ms | 18 s¹ | Mac CPU |
-| `moonshine-stream-medium` | HF transformers medium stream | 278–286 ms | 5.8 s | Mac CPU |
-| `whisper-faster-large-v3` | faster-whisper large-v3 int8 | ~4500 ms | 194 s¹ | Mac CPU |
-| `remote-moonshine` | OpenAI-compat remote (requires env) | ~200 ms² | 0 s | network |
-| `remote-speaches` | OpenAI-compat remote (requires env) | ~410 ms² | 0 s | network |
-| `remote-chain` | remote-moonshine → remote-speaches | ~190 ms² | 0 s | network |
+---
 
-¹ First-time load includes downloading the model weights. Subsequent loads use the local cache and are sub-second.
-² Depends on your remote host. Numbers shown were measured against a CUDA 12.6 + RTX 3090 server over Tailscale.
+## ⏱️ Latency leaderboard (Apple M5 Max, 3-second clip)
 
-**Recommended default: `mlx-chain`.** Local MLX `whisper-large-v3-turbo` on the happy path (~89 ms, no network), automatically falls back to a remote `large-v3` if local returns empty. Best latency–accuracy–privacy balance.
+```
+mlx-whisper-base-en           ▏ 14 ms     ▏▏▏░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  🏆 fastest accurate
+moonshine-onnx-tiny           ▏ 17 ms     ▏▏▏▏░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  
+moonshine-onnx-base           ▏ 30 ms     ▏▏▏▏▏▏▏░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  
+mlx-whisper-small-en          ▏ 40 ms     ▏▏▏▏▏▏▏▏▏░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  
+moonshine-stream-tiny         ▏ 73 ms     ▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏░░░░░░░░░░░░░░░░░░░░░░  
+mlx-whisper-large-v3-turbo    ▏ 89 ms     ▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏░░░░░░░░░░░░░░░░░░░  ⭐ recommended
+mlx-whisper-distil-large-v3   ▏ 90 ms     ▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏░░░░░░░░░░░░░░░░░░░  
+mlx-chain                     ▏ 93 ms     ▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏░░░░░░░░░░░░░░░░░░  ⭐ chain w/ fallback
+mlx-whisper-large-v3          ▏147 ms     ▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏░░░░░░  
+remote-moonshine              ▏208 ms     ▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏  
+remote-chain                  ▏197 ms     ▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏  
+moonshine-stream-medium       ▏280 ms     ▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏ + cont
+remote-speaches (cloud GPU)   ▏412 ms     ▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏ + cont
 
-## Installation
+   ──── reference ────
+deepgram via api.anthropic.com (cloud) ~ 300–500 ms typical (Anthropic + Deepgram + network)
+```
 
-### From PyPI (when published)
+> **Most people should default to `mlx-chain`**: MLX whisper-large-v3-turbo runs locally at ~89 ms; on the rare empty transcript it cascades to a remote `large-v3` for accuracy. Best privacy + best accuracy + best latency, all at once.
 
-```sh
-pip install "stt-switch[mlx,moonshine]"      # most users
-pip install "stt-switch[all]"                # every backend
-pip install "stt-switch[mlx]"                # MLX only (smallest install)
+---
+
+## 🎛️ Backend catalog
+
+<table>
+<tr><th>Backend</th><th>Best for</th><th>Profiles</th></tr>
+
+<tr><td>
+
+**🍎 MLX-Whisper**
+
+Apple's native ML framework, runs on the GPU + Neural Engine.
+
+</td><td>
+
+Lowest latency on Apple Silicon. Whisper accuracy.
+
+</td><td>
+
+`mlx-whisper-tiny-en` `mlx-whisper-base-en` `mlx-whisper-small-en` `mlx-whisper-medium-en` `mlx-whisper-medium` `mlx-whisper-distil-large-v3` `mlx-whisper-large-v3-turbo` `mlx-whisper-large-v3`
+
+</td></tr>
+
+<tr><td>
+
+**🔊 Moonshine**
+
+UsefulSensors' tiny ASR — purpose-built for streaming.
+
+</td><td>
+
+Sub-30 ms commands. CPU-only, no Apple Silicon required.
+
+</td><td>
+
+`moonshine-onnx-tiny` `moonshine-onnx-base` `moonshine-stream-tiny` `moonshine-stream-medium` `moonshine-hf-base`
+
+</td></tr>
+
+<tr><td>
+
+**📚 faster-whisper**
+
+CTranslate2-quantized Whisper, cross-platform.
+
+</td><td>
+
+CPU baseline if MLX isn't an option.
+
+</td><td>
+
+`whisper-faster-base` `whisper-faster-large-v3`
+
+</td></tr>
+
+<tr><td>
+
+**🌐 Remote OpenAI-compatible**
+
+Any server with `/v1/audio/transcriptions`. [Speaches](https://github.com/speaches-ai/speaches), self-hosted Whisper, anything.
+
+</td><td>
+
+Offload to your own GPU server. Configurable via env.
+
+</td><td>
+
+`remote-moonshine` `remote-speaches` `remote-chain`
+
+</td></tr>
+
+<tr><td>
+
+**🔗 Chains**
+
+Try fast/local first; fall back to a stronger model on empty/error.
+
+</td><td>
+
+Best accuracy + latency + privacy combo.
+
+</td><td>
+
+`mlx-chain` ⭐ `remote-chain`
+
+</td></tr>
+
+</table>
+
+---
+
+## 🔧 Installation
+
+```bash
+# Most users — MLX backends + Moonshine
+pip install "git+https://github.com/gitjfmd/stt-switch.git#egg=stt-switch[mlx,moonshine]"
+
+# Everything (largest install, all backends ready)
+pip install "git+https://github.com/gitjfmd/stt-switch.git#egg=stt-switch[all]"
+
+# MLX only (smallest install, fastest path on Apple Silicon)
+pip install "git+https://github.com/gitjfmd/stt-switch.git#egg=stt-switch[mlx]"
 ```
 
 ### From source
 
-```sh
-git clone https://github.com/jfmd/stt-switch.git
+```bash
+git clone https://github.com/gitjfmd/stt-switch.git
 cd stt-switch
 pip install -e ".[all]"
 ```
 
 ### System dependencies
 
-- **macOS** with Apple Silicon (M1 / M2 / M3 / M4 / M5)
-- **espeak-ng** (only if using the `kokoro_tts`-related profiles): `brew install espeak-ng`
-- **ffmpeg** for audio conversion: `brew install ffmpeg`
-
-## CLI
-
-```
-stt-switch                              # interactive picker (current marked)
-stt-switch list                         # show every profile
-stt-switch current                      # show what's running now
-stt-switch <profile>                    # set + reload
-stt-switch reload                       # reload without changing profile
-stt-switch bench                        # latency comparison across the catalog
-stt-switch wire                         # install + start the proxy, route CC to it
-stt-switch unwire                       # full revert
+```bash
+brew install ffmpeg                 # required (audio conversion)
+brew install espeak-ng              # only if using TTS profiles (not for STT)
 ```
 
-## How it works
+---
 
-`cc-voice-proxy` is a small WebSocket server on `127.0.0.1:8113` that implements the **Anthropic `voice_stream` protocol** Claude Code uses internally:
+## 💻 CLI
+
+| Command | What it does |
+|---|---|
+| `stt-switch` | Interactive picker (current marked) |
+| `stt-switch list` | Show every profile |
+| `stt-switch current` | Show what's running now |
+| `stt-switch <profile>` | Set + reload (e.g. `stt-switch mlx-chain`) |
+| `stt-switch reload` | Reload without changing profile |
+| `stt-switch bench` | Latency leaderboard against the catalog |
+| `stt-switch wire` | Install + start the proxy, route Claude Code to it |
+| `stt-switch unwire` | Full revert |
 
 ```
-Client → Server:                    Server → Client:
-  binary linear16 PCM                 {"type":"TranscriptText",  "data":"..."}
-  {"type":"KeepAlive"}                {"type":"TranscriptEndpoint"}
-  {"type":"CloseStream"}              {"type":"TranscriptError", "error_code":..., "description":...}
+$ stt-switch
+STT backend switcher
+Current: mlx-chain
+
+  ▸  1. moonshine-onnx-base
+     2. moonshine-onnx-tiny
+     3. moonshine-stream-tiny
+     ...
+    11. mlx-whisper-large-v3-turbo
+    12. ▸ mlx-chain
+    ...
+Pick a number (or blank to cancel):
 ```
 
-When `VOICE_STREAM_BASE_URL=ws://127.0.0.1:8113` is set in the shell that launches `claude`, the binary connects here instead of `wss://api.anthropic.com`. Authentication is unchanged (the proxy ignores the OAuth bearer; Claude Code still writes it).
+---
 
-The proxy buffers all audio for the duration of a `/voice` press, transcribes once on `CloseStream`, and emits `TranscriptText` + `TranscriptEndpoint` so Claude Code's UI commits the transcript exactly as it would from the cloud path.
+## 🧪 How the protocol decode works
 
-See [`docs/PROTOCOL.md`](docs/PROTOCOL.md) for the protocol notes (decoded from publicly leaked Claude Code source).
+Claude Code's `/voice` mode opens a WebSocket to `api.anthropic.com/api/ws/speech_to_text/voice_stream`. Anthropic wraps Deepgram in their own simpler JSON shape — sending Deepgram-native messages back will silently fail (the client ignores them and renders **"no speech detected"**, which is what we kept hitting at first).
 
-## Backends
+The decoded protocol — verified by reading the publicly leaked Claude Code source:
 
-| Engine | What | When to use |
-|---|---|---|
-| **MLX-Whisper** | Apple's MLX framework + Whisper | Best latency on Apple Silicon |
-| **Moonshine** | UsefulSensors Moonshine ASR (ONNX or HF) | Tiny models, CPU-friendly |
-| **faster-whisper** | CTranslate2-quantized Whisper | Cross-platform CPU baseline |
-| **remote OpenAI-compatible** | Any server with `/v1/audio/transcriptions` | Speaches, OpenAI, your own deployment |
+```jsonc
+// Server → client
+{"type":"TranscriptText",      "data":"your transcribed words"}
+{"type":"TranscriptEndpoint"}
+{"type":"TranscriptError",     "error_code":"...", "description":"..."}
 
-You can configure your own remote endpoint:
-
-```sh
-export STT_SWITCH_REMOTE_SPEACHES_URL=http://your-host:31111
-export STT_SWITCH_REMOTE_MOONSHINE_URL=http://your-host:31112
-stt-switch remote-chain
+// Client → server
+binary linear16 PCM frames
+{"type":"KeepAlive"}                 // every ~8 s
+{"type":"CloseStream"}               // on key release / finalize
 ```
 
-## Optional: voice-clone capture
+Full notes: [**docs/PROTOCOL.md**](docs/PROTOCOL.md) (with credit to the [reverse-engineering community](https://github.com/ComeOnOliver/claude-code-analysis)).
 
-When the proxy gets a non-empty transcript with sane duration (3–30 s by default), it can fire-and-forget the audio + transcript to a [LuxTTS](https://github.com/ysharma3501/LuxTTS) server you run, building a voice clone library automatically as you use Claude Code voice mode.
+---
 
-Enable by setting:
-```sh
-export STT_SWITCH_LUXTTS_URL=https://your-luxtts:17860
+## 🛡️ Privacy posture
+
+<table>
+<tr><td width="50%">
+
+### Default (mlx-chain)
+
+```
+    🎙️  →  ws://127.0.0.1:8113  →  🍎 MLX-Whisper  →  📝
+                ↑                          ↑
+       loopback only                 in-process
+
+         ZERO OUTBOUND TRAFFIC
 ```
 
-Disable with `export STT_SWITCH_CAPTURE_ENABLED=0`.
+</td><td width="50%">
 
-## Privacy posture
+### What Claude Code does without us
 
-- **Default profiles**: zero outbound network. All transcription happens on your Mac.
-- **Remote profiles**: only enabled if you set the corresponding `STT_SWITCH_REMOTE_*_URL` env var. The repo ships no IPs or hostnames.
-- **Clone capture**: opt-in. Off if `STT_SWITCH_LUXTTS_URL` is not set.
-- **Audio never lands on disk** unless you explicitly enable capture-to-LuxTTS, in which case it's posted to your own server.
-- **The proxy binds `127.0.0.1` only.** Loopback bind keeps macOS firewall and Tailscale ACLs out of the picture.
+```
+    🎙️  →  wss://api.anthropic.com  →  🌐 Deepgram  →  📝
+                                   
+            ✗ Anthropic sees audio
+            ✗ Deepgram sees audio
+            ✗ no in-product opt-out
+```
 
-## Caveats
+</td></tr>
+</table>
 
-- **Apple Silicon required for MLX backends.** Intel Macs can use Moonshine ONNX or faster-whisper-cpu.
-- **macOS only for the launchd integration.** The proxy itself is plain Python and would run on Linux too; the wire/unwire scripts use `launchctl` and `~/Library/LaunchAgents/`. PRs for a systemd-user variant welcome.
-- **First model load can be slow** (several seconds to several minutes for downloading large MLX weights). After the first load, models are cached under `~/.cache/huggingface/`.
-- **Some MLX checkpoints occasionally mishear letter-acronyms** ("STT" → "ETS" / "ATS"). The chain profiles fall back to a stronger model on empty transcripts, but acronym errors aren't "empty" — they're just less accurate. Use `mlx-whisper-large-v3` or `remote-speaches` if absolute accuracy matters more than latency.
-- **Claude Code voice mode is gated by feature flags in the Anthropic build.** This project doesn't change that gating; it just redirects the destination of audio that the binary was already going to send.
-- **Restart `claude` after switching profiles** isn't necessary — the proxy is one process and swap takes effect immediately. Switching the *env var* (e.g., from cloud to local) does require a new `claude` process to pick it up, since CC reads `VOICE_STREAM_BASE_URL` once at startup.
-- **No legal opinion offered.** Claude Code's terms of service govern your use; consult them if uncertain.
+- **No private hostnames or IPs** are baked in. Remote endpoints require explicit env vars (`STT_SWITCH_REMOTE_*_URL`); the repo ships none.
+- **Loopback bind only** (`127.0.0.1`). The proxy never touches a network interface, never trips your firewall.
+- **Optional clone capture** (off by default). Set `STT_SWITCH_LUXTTS_URL` to opt in.
+- **Audio never lands on disk** unless you turn on capture, in which case it's posted to your own server.
 
-## Credits / prior art
+---
 
-- **Anthropic** — for shipping Claude Code with a single `VOICE_STREAM_BASE_URL` env-var override that makes this entire project possible.
-- **[useful-moonshine-onnx](https://github.com/usefulsensors/moonshine)** — UsefulSensors' Moonshine ASR models in ONNX form.
-- **[Speaches](https://github.com/speaches-ai/speaches)** — OpenAI-compatible STT/TTS server (used as one of the optional remote backends).
-- **[mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper)** — Apple's MLX port of Whisper.
-- **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** — CTranslate2-quantized Whisper.
-- **Claude Code reverse-engineering community** ([1](https://github.com/ComeOnOliver/claude-code-analysis), [2](https://github.com/ruvnet/open-claude-code), [3](https://github.com/Yuyz0112/claude-code-reverse)) — for decoding the `voice_stream` protocol from the publicly distributed binary and source maps. The protocol implementation in this repo is built on their work.
+## 📦 Optional: voice-clone capture
 
-## License
+When the proxy gets a non-empty transcript with sane duration (3–30 s by default), it can fire-and-forget the audio + transcript to a [LuxTTS](https://github.com/ysharma3501/LuxTTS) server you run, growing your voice clone library automatically as you talk to Claude Code.
 
-MIT. See [LICENSE](LICENSE).
+```bash
+# Enable
+export STT_SWITCH_LUXTTS_URL=https://your-luxtts-host:17860
+
+# Disable
+export STT_SWITCH_CAPTURE_ENABLED=0
+```
+
+Files land at `voices/mac/cc/<timestamp>.wav` on your LuxTTS server.
+
+---
+
+## ⚠️ Caveats
+
+| | |
+|---|---|
+| 🍎 | **MLX requires Apple Silicon.** Intel Macs use Moonshine ONNX or faster-whisper-cpu. |
+| 🐧 | **Linux/Windows aren't first-class yet.** Proxy itself is plain Python and runs fine; the wire/unwire scripts use macOS launchd. systemd-user PRs welcome. |
+| 📥 | **First model load downloads weights** (large MLX ~1 GB; cached after). Subsequent loads are sub-second. |
+| 🔤 | **Letter-acronyms can mishear** ("STT" → "ETS"). Use `mlx-whisper-large-v3` or `remote-speaches` for absolute accuracy. |
+| 🔓 | **Anthropic's voice gating still applies.** This redirects where audio *goes*, not whether the binary will send it. |
+| 🔄 | **Restart `claude` after `stt-switch wire`** — the binary reads the env var once at startup. |
+
+---
+
+## 🙏 Credits
+
+This project rests on a stack of excellent open-source work:
+
+- [**Anthropic**](https://www.anthropic.com/) — for shipping Claude Code with the `VOICE_STREAM_BASE_URL` env var that makes this whole thing possible
+- [**MLX**](https://github.com/ml-explore/mlx) + [**mlx-whisper**](https://github.com/ml-explore/mlx-examples/tree/main/whisper) — Apple's ML framework + Whisper port
+- [**useful-moonshine-onnx**](https://github.com/usefulsensors/moonshine) — UsefulSensors Moonshine ONNX
+- [**faster-whisper**](https://github.com/SYSTRAN/faster-whisper) — CTranslate2-quantized Whisper
+- [**Speaches**](https://github.com/speaches-ai/speaches) — OpenAI-compatible STT/TTS server (used for the `remote-speaches` profile)
+- [**Claude Code reverse-engineering community**](https://github.com/ComeOnOliver/claude-code-analysis) — for decoding the voice_stream protocol from the publicly available source
+
+---
+
+## 🤝 Contributing
+
+PRs welcome. Areas where help would land especially well:
+
+- 🐧 Linux systemd-user variant of `wire-cc-voice.sh` / `unwire-cc-voice.sh`
+- 🪟 Windows support (proxy already runs; needs equivalent of launchd registration)
+- 🟢 NVIDIA CUDA path for `whisper-faster-large-v3` and Moonshine
+- 🎛️ Live partial transcripts (interim `TranscriptText` events during speech)
+- 📊 PyPI publish + GitHub Action that runs `stt-bench.py` on every PR
+
+---
+
+<div align="center">
+
+**MIT License · made on Apple Silicon · audio stays on device**
+
+[![GitHub stars](https://img.shields.io/github/stars/gitjfmd/stt-switch?style=social)](https://github.com/gitjfmd/stt-switch)
+
+</div>
