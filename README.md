@@ -351,6 +351,30 @@ This project rests on a stack of excellent open-source work:
 
 ---
 
+## 👤 About the author
+
+Built by **[Dr. Junaid Farooq, M.D.](https://jfmd.dev)** — a board-certified physician (Internal Medicine, Infectious Diseases) who codes, building at the intersection of medicine, AI infrastructure, and security.
+
+He runs hospital medicine by day and ships open-source medical/AI tooling by night through his companies:
+
+- 🏥 **[OpenMedica](https://openmedica.dev)** *(IntelMedica)* — *"reclaiming the future of medicine"* with open-source, **physician-governed** medical AI tools (747+ skills, FDA data, clinical guidelines, drug interactions, the Open Medical Skills marketplace)
+- 🔐 **[SECSOLS](https://secsols.io)** — MCP-native infrastructure for AI-agent payments and identity (AgenticPay, Ephemeral Cards, Agent Identity Protocol)
+- 🩺 **RN Scribe** — nursing documentation software for clinical environments
+
+`stt-switch` was born out of the same impulse that drives the rest of his work: **infrastructure for autonomous AI agents should be private-first, on-device when possible, and built for the people who actually use it.** A physician dictating to a coding agent shouldn't have their voice routed through two third-parties to get a transcript back.
+
+Find him at:
+- 🌐 **[jfmd.dev](https://jfmd.dev)** — the personal site
+- 🐦 **[@jfmdid](https://x.com/jfmdid)** on X
+- 💼 **[linkedin.com/in/jfmdid](https://linkedin.com/in/jfmdid)** on LinkedIn
+- 🐙 **[@gitjfmd](https://github.com/gitjfmd)** on GitHub
+
+[![Website](https://img.shields.io/badge/jfmd.dev-physician%20+%20technologist-1f6feb?style=flat-square)](https://jfmd.dev)
+[![X](https://img.shields.io/badge/X-@jfmdid-000?style=flat-square&logo=x)](https://x.com/jfmdid)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-jfmdid-0a66c2?style=flat-square&logo=linkedin)](https://linkedin.com/in/jfmdid)
+
+---
+
 ## 🤝 Contributing
 
 PRs welcome. Areas where help would land especially well:
