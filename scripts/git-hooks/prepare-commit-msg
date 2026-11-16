@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# prepare-commit-msg — stamp per-CLI, per-session, per-model identity on agent commits.
+#
+# This is the ONE place every CLI routes through: claude, codex, kimi, agy, qwen, omp, pi,
+# opencode and hermes all ultimately run `git commit`, so one repo hook covers all of them
+# instead of nine per-CLI shims. A CLI self-identifies via AGENT_CLI/AGENT_SESSION in its
+# environment (~/.local/bin/_otel-cli-wrapper exports both; the claude PostToolUse hook sets
+# them from the PostToolUse stdin `.session_id`). No env => a human => no trailer, untouched.
+#
+# Lib resolution: the REPO copy FIRST (the source of truth: the developer edits it,
+# CI tests it), $HOME/.local/lib only as a fallback for repos that do not carry the
+# script. The HOME-first order made whichever repo ran its installer LAST own every
+# commit fleet-wide (CEO 2026-11-16: "whichever repo installs last wins --- that's
+# not work that luck - we need a fix").
+#
+# Author is deliberately NOT changed: blame and the contributor graph stay the CEO's.
+# Committer identity is set by the caller (GIT_COMMITTER_NAME/EMAIL), not here — a
+# prepare-commit-msg hook cannot change the committer of the commit it is preparing.
+#
+# NEVER exits non-zero. A commit must never fail because of attribution bookkeeping.
+set -uo pipefail
+msg_file="${1:-}"
+[ -n "$msg_file" ] && [ -f "$msg_file" ] || exit 0
+case "${2:-}" in merge|squash) exit 0 ;; esac
+top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+# The repo copy is the source of truth (the developer edits it, CI tests it); the
+# HOME copy is only a fallback for repos that do not carry the script.
+lib="$top/scripts/agent-commit-identity.sh"
+[ -r "$lib" ] || lib="$HOME/.local/lib/agent-commit-identity.sh"
+[ -r "$lib" ] || exit 0
+. "$lib" "$top" 2>/dev/null || exit 0
+[ -n "${AGENT_TRAILER:-}" ] || exit 0
+# Idempotent: a rebase/amend re-runs this hook on a message that already carries the trailer.
+# ponytail: ask GIT which lines are trailers (git interpret-trailers --parse) instead of
+# grepping the whole file — a mention of "Agent-Session:" in the commit BODY (e.g. a
+# message documenting these fields) is not a trailer and must not suppress the real one.
+_aci_has_trailer() {
+  git interpret-trailers --parse "$1" 2>/dev/null | grep -qiF "$2"
+}
+_aci_has_trailer "$msg_file" 'Agent-Session:' && exit 0
+# AGENT_TRAILER is MULTI-LINE (Agent-Session: ... and optionally Agent-Model: ...).
+# One `--trailer` per line: a single --trailer with an embedded newline is wrong.
+while IFS= read -r tl; do
+  [ -n "$tl" ] && git interpret-trailers --in-place --trailer "$tl" "$msg_file" 2>/dev/null
+done <<EOF
+$AGENT_TRAILER
+EOF
+# AGENT_WORK_RECORD is MULTI-LINE too (one field per line). Same rule: one --trailer
+# per line. Empty on public/unknown repos => nothing appended.
+# Agent-Session-Title: as an actual TRAILER is the work-record guard (amend/rebase
+# safe); the same string in the body is not.
+if [ -n "${AGENT_WORK_RECORD:-}" ] && ! _aci_has_trailer "$msg_file" 'Agent-Session-Title:'; then
+  while IFS= read -r wl; do
+    [ -n "$wl" ] && git interpret-trailers --in-place --trailer "$wl" "$msg_file" 2>/dev/null
+  done <<EOF
+$AGENT_WORK_RECORD
+EOF
+fi
+exit 0

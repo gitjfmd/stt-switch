@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# chained-hook — global git hook dispatcher.
+#
+# Installed via `git config --global core.hooksPath ~/.config/git/hooks`; every
+# standard hook name in that directory is a symlink to this file. One dispatcher
+# for every repo on this Mac, zero per-repo install.
+#
+# Two jobs, in order:
+#   1. prepare-commit-msg: stamp the agent identity trailer (Agent-Session + optional
+#      Agent-Model) onto agent commits, plus the work record (Agent-Session-Title /
+#      -Start / -Branch / -Message / -Agents / -Jsonl) in PRIVATE repos only.
+#      Human commits (no markers) are left alone.
+#   2. ALWAYS: chain to the repo's own hook of the same name, so existing per-repo
+#      hooks keep working.
+#
+# FAIL-SAFE: this hook must NEVER break a commit. Every identity step is wrapped so
+# it cannot exit non-zero; the chain step only execs a target that exists and is
+# executable, and that target's own exit code is its business (same as today).
+#
+# Shell contract: POSIX-ish bash, no bashisms beyond what macOS bash 3.2 supports.
+
+set -uo pipefail
+
+hook="$(basename "$0")"
+
+# ---------------------------------------------------------------- identity ----
+# Only prepare-commit-msg stamps. The rest just chain.
+if [ "$hook" = "prepare-commit-msg" ]; then
+    (
+        set +e
+        msg_file="${1:-}"
+        [ -n "$msg_file" ] && [ -f "$msg_file" ] || exit 0
+        # merge/squash commits carry no identity: the original commit keeps the trail.
+        case "${2:-}" in merge|squash) exit 0 ;; esac
+
+        top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+        [ -n "$top" ] || exit 0
+
+        # Repo copy first (source of truth), HOME fallback for repos that do not
+        # carry the script. The old HOME-only resolution made whichever repo ran
+        # its installer LAST own every commit fleet-wide.
+        lib="$top/scripts/agent-commit-identity.sh"
+        [ -r "$lib" ] || lib="$HOME/.local/lib/agent-commit-identity.sh"
+        [ -r "$lib" ] || exit 0
+        . "$lib" "$top" >/dev/null 2>&1 || exit 0
+        [ -n "${AGENT_TRAILER:-}" ] || exit 0
+
+        # Idempotence: if the message ALREADY carries the trailer, do nothing.
+        # ponytail: ask GIT which lines are trailers (git interpret-trailers
+        # --parse) instead of grepping the whole file — a mention of
+        # "Agent-Session:" in the commit BODY (e.g. a message documenting these
+        # fields) is not a trailer and must not suppress the real one.
+        _aci_has_trailer() {
+            git interpret-trailers --parse "$1" 2>/dev/null | grep -qiF "$2"
+        }
+        if _aci_has_trailer "$msg_file" 'Agent-Session:'; then
+            exit 0
+        fi
+
+        # AGENT_TRAILER is MULTI-LINE (Agent-Session: ... and optionally Agent-Model: ...).
+        # One `--trailer` per line: a single --trailer with an embedded newline is wrong.
+        while IFS= read -r tl; do
+            [ -n "$tl" ] || continue
+            git interpret-trailers --in-place --trailer "$tl" "$msg_file" >/dev/null 2>&1
+        done <<EOF
+$AGENT_TRAILER
+EOF
+
+        # AGENT_WORK_RECORD is MULTI-LINE too (one field per line). Same rule:
+        # one --trailer per line. Empty on public/unknown repos => nothing appended.
+        # Agent-Session-Title: as an actual TRAILER is the work-record guard
+        # (amend/rebase safe); the same string in the body is not.
+        if [ -n "${AGENT_WORK_RECORD:-}" ] && ! _aci_has_trailer "$msg_file" 'Agent-Session-Title:'; then
+            while IFS= read -r wl; do
+                [ -n "$wl" ] || continue
+                git interpret-trailers --in-place --trailer "$wl" "$msg_file" >/dev/null 2>&1
+            done <<EOF
+$AGENT_WORK_RECORD
+EOF
+        fi
+        exit 0
+    ) || true
+fi
+
+# ------------------------------------------------------------------ chain ----
+# Resolve the repo's own hooks dir: `git rev-parse --git-common-dir`, made absolute.
+# A relative result is relative to the repo toplevel (that is what git itself does).
+common_dir="$(git rev-parse --git-common-dir 2>/dev/null)" || common_dir=""
+if [ -n "$common_dir" ]; then
+    case "$common_dir" in
+        /*) : ;;
+        *)
+            top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+            if [ -n "$top" ]; then
+                common_dir="$top/$common_dir"
+            fi
+            ;;
+    esac
+    target="$common_dir/hooks/$hook"
+
+    if [ -f "$target" ] && [ -x "$target" ]; then
+        # Loop guard: never exec ourselves (directly or through a symlink).
+        # realpath resolves symlinks, so a repo hook symlinked back to the dispatcher
+        # is caught. Fallback to the literal paths when realpath is unavailable.
+        if command -v realpath >/dev/null 2>&1; then
+            self_real="$(realpath "$0" 2>/dev/null || echo "$0")"
+            target_real="$(realpath "$target" 2>/dev/null || echo "$target")"
+        else
+            self_real="$0"
+            target_real="$target"
+        fi
+        if [ "$target_real" != "$self_real" ]; then
+            # exec preserves argv and stdin — required for pre-receive/proc-receive/post-receive.
+            exec "$target" "$@"
+        fi
+    fi
+fi
+
+exit 0
